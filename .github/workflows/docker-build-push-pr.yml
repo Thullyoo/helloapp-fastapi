@@ -1,51 +1,78 @@
-name: Docker build and push image
+name: Build Docker and PR to Update Manifest
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
-    
+
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout 
+      - name: Checkout
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Git config
+      - name: Git Config
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
       - name: Get the last tag and generate a new tag
-        id: version
+        id: tagger
         run: |
           latest=$(git tag | grep '^v[0-9]\+$' | sort -V | tail -n1)
-          if [ -z "$latest" ]; then
-            next=v1
-          else
-            num=${latest#v}
-            next=v$((num + 1))
-          fi
-          echo "Última tag: $latest"
+          [ -z "$latest" ] && next=v1 || next="v$(( ${latest#v} + 1 ))"
           echo "Nova tag: $next"
           git tag "$next"
           git push origin "$next"
           echo "tag=$next" >> $GITHUB_OUTPUT
 
-      - name: Login on Dockerhub
+      - name: Login on Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and Push image on Dockerhub
+      - name: Build and push a new image
         uses: docker/build-push-action@v3
         with:
           context: .
-          file: ./infra/docker/Dockerfile
+          file: ./infra/docker/Dockerfile  
           push: true
-          tags: thullyodev/myapp-fastapi:${{ steps.version.outputs.tag }}
+          tags: thullyodev/myapp-fastapi:${{ steps.tagger.outputs.tag }}
+
+      - name: SSH Config
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Clone repository and create branch
+        run: |
+          git clone git@github.com:Thullyoo/helloapp-manifests.git
+          cd helloapp-manifests
+
+          BRANCH_NAME=update-image-${{ steps.tagger.outputs.tag }}
+          git checkout -b $BRANCH_NAME
+
+          sed -i "s|image:.*|image: thullyodev/myapp-fastapi:${{ steps.tagger.outputs.tag }}|" k8s/deployment.yaml
+
+          git add .
+          git commit -m "chore: update image to ${{ steps.tagger.outputs.tag }}"
+          git push origin $BRANCH_NAME
+
+      - name: Create Pull Request on GitHub API
+        run: |
+          curl -X POST -H "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/Thullyoo/helloapp-manifests/pulls \
+               -d '{
+                 "title":"feat: update docker image for thullyodev/myapp-fastapi:${{ steps.tagger.outputs.tag }}",
+                 "head":"update-image-${{ steps.tagger.outputs.tag }}",
+                 "base":"main",
+                 "body":"This PR update the kubernetes manifests for use the new image created: `thullyodev/myapp-fastapi:${{ steps.tagger.outputs.tag }}`"
+               }'
