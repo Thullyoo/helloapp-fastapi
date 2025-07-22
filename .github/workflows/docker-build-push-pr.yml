@@ -3,6 +3,8 @@ name: Build Docker and PR to Update Manifest
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    
 
 permissions:
   contents: write
