@@ -58,6 +58,9 @@ jobs:
           git clone git@github.com:Thullyoo/helloapp-manifests.git
           cd helloapp-manifests
 
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
           BRANCH_NAME=update-image-${{ steps.tagger.outputs.tag }}
           git checkout -b $BRANCH_NAME
 
